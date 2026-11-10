@@ -7,3 +7,4 @@ numpy
 httpx
 openai
 scikit-learn
+langgraph

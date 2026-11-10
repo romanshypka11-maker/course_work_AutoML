@@ -18,7 +18,7 @@ class PythonRunner:
     з обмеженням часу та санітизацією помилок.
     """
 
-    def __init__(self, timeout_sec: int = 30):
+    def __init__(self, timeout_sec: int = 60):
         self.timeout_sec = timeout_sec
 
     def _sanitize_stderr(self, stderr: str) -> str:

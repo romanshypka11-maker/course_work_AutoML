@@ -53,7 +53,7 @@ if uploaded_file is not None:
                     "http://backend:8000/run_automl",
                     data=data_payload,
                     files=files_payload,
-                    timeout=30.0,
+                    timeout=120.0,
                 )
 
                 if response.status_code == 200:
@@ -69,4 +69,4 @@ if uploaded_file is not None:
                     " запущений контейнер backend на порту 8000."
                 )
             except Exception as e:
-                st.error(f"Вини кла помилка під час відправки запиту: {e}")
+                st.error(f"Виникла помилка під час відправки запиту: {e}")

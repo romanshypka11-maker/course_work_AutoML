@@ -1,12 +1,14 @@
-version: "3.8"
-
 services:
   backend:
     build: ./backend
     ports:
       - "8001:8000"
     volumes:
-      - ./backend/uploads:/backend/uploads
+      - ./backend:/backend
+    environment:
+      -  MODEL_API_KEY=${MODEL_API_KEY}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
   frontend:
     build: ./frontend
     ports:

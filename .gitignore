@@ -1,0 +1,29 @@
+# Секрети та змінні середовища
+.env
+
+# Python / Кеш
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# IDE та редактори
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Дані та завантаження користувача
+backend/uploads/
+uploads/
+*.csv
+*.parquet
+*.pkl
+
+# ОС файли
+.DS_Store
+Thumbs.db
