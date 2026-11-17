@@ -1,7 +1,7 @@
 from openai import OpenAI
 
-from config import get_llm_settings
-from state import AutoMLState
+from ...core.config import get_llm_settings
+from ...schemas.state import AutoMLState
 
 
 class CoderAgent:

@@ -1,4 +1,4 @@
-from state import AutoMLState
+from ...schemas.state import AutoMLState
 
 
 def _quality_is_acceptable(metrics: dict[str, float]) -> bool:

@@ -9,5 +9,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Копіюємо решту коду бекенда
 COPY . .
 
-# Запуск Uvicorn
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Запуск FastAPI application package
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -18,15 +18,11 @@ venv/
 *.swp
 *.swo
 
-# User data and generated artifacts
-backend/uploads/
-uploads/
-backend/artifacts/
-artifacts/
-*.csv
-*.parquet
-*.pkl
-*.joblib
+# Runtime uploads and generated model artifacts
+backend/storage/uploads/*
+!backend/storage/uploads/.gitkeep
+backend/storage/artifacts/*
+!backend/storage/artifacts/.gitkeep
 
 # OS files
 .DS_Store

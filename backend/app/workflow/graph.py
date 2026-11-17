@@ -1,10 +1,10 @@
 from langgraph.graph import END, StateGraph
 
-from nodes.coder import coder_node
-from nodes.evaluator import evaluator_node
-from nodes.refiner import prompt_refiner_node
-from nodes.sandbox import sandbox_execution_node
-from state import AutoMLState
+from ..schemas.state import AutoMLState
+from .nodes.coder import coder_node
+from .nodes.evaluator import evaluator_node
+from .nodes.refiner import prompt_refiner_node
+from .nodes.sandbox import sandbox_execution_node
 
 
 def decide_next_step(state: AutoMLState) -> str:
