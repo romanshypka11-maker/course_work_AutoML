@@ -1,8 +1,11 @@
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 from typing import NamedTuple
+
 
 class ExecutionResult(NamedTuple):
     success: bool
@@ -11,78 +14,117 @@ class ExecutionResult(NamedTuple):
     stderr: str
     timed_out: bool
     error_info: str | None
+    artifact_files: dict[str, str]
+
 
 class PythonRunner:
-    """
-    Безпечний виконавець Python-коду в ізольованому тимчасовому середовищі
-    з обмеженням часу та санітизацією помилок.
+    """Execute generated code in a short-lived working directory.
+
+    This isolates files for each run and enforces a timeout. It is not a complete
+    security boundary for hostile code; deploy this component in a locked-down
+    container with no host secrets or network access.
     """
 
-    def __init__(self, timeout_sec: int = 60):
+    def __init__(self, timeout_sec: int = 90):
         self.timeout_sec = timeout_sec
 
-    def _sanitize_stderr(self, stderr: str) -> str:
-        """
-        Очищує stderr від потенційних сирих даних або довгих рядків,
-        щоб запобігти витоку конфіденційної інформації у промпти LLM.
-        """
-        if not stderr:
-            return ""
+    @staticmethod
+    def _sanitize_stderr(stderr: str) -> str:
+        return (stderr or "")[-3000:]
 
-        trimmed = stderr[-2000:]
-        return trimmed
+    @staticmethod
+    def _safe_relative_path(path: str) -> Path:
+        candidate = Path(path)
+        if candidate.is_absolute() or ".." in candidate.parts:
+            raise ValueError(f"Unsafe relative file path: {path}")
+        return candidate
+
+    @staticmethod
+    def _write_input_file(base_dir: Path, filename: str, content: str | bytes) -> None:
+        relative = PythonRunner._safe_relative_path(filename)
+        destination = base_dir / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(content, bytes):
+            destination.write_bytes(content)
+        else:
+            destination.write_text(content, encoding="utf-8")
+
+    @staticmethod
+    def _persist_artifacts(out_dir: Path, artifact_dir: str | Path | None) -> dict[str, str]:
+        if artifact_dir is None or not out_dir.exists():
+            return {}
+
+        destination_root = Path(artifact_dir)
+        destination_root.mkdir(parents=True, exist_ok=True)
+        persisted: dict[str, str] = {}
+        for source in out_dir.rglob("*"):
+            if not source.is_file():
+                continue
+            relative = source.relative_to(out_dir)
+            destination = destination_root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+            persisted[str(relative)] = str(destination)
+        return persisted
 
     def run_code(
         self,
         code: str,
-        input_files: dict[str, str] | None = None,
+        input_files: dict[str, str | bytes] | None = None,
         expected_output_files: list[str] | None = None,
+        artifact_dir: str | Path | None = None,
     ) -> ExecutionResult:
-        """
-        Виконує Python-код у тимчасовій директорії з таймаутом.
-        """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp_path = Path(tmpdir)
+        """Run a script and persist its out/ artifacts before cleanup."""
+        for output_file in expected_output_files or []:
+            self._safe_relative_path(output_file)
 
-            # 1. Записуємо вхідні файли у пісочницу, якщо вони є
+        with tempfile.TemporaryDirectory(prefix="automl-") as tmpdir:
+            tmp_path = Path(tmpdir)
             if input_files:
                 for filename, content in input_files.items():
-                    file_path = tmp_path / filename
-                    file_path.parent.mkdir(parents=True, exist_ok=True)
-                    file_path.write_text(content, encoding="utf-8")
+                    self._write_input_file(tmp_path, filename, content)
 
-            # 2. Створюємо папку для вихідних артефактів (out/)
             out_dir = tmp_path / "out"
             out_dir.mkdir(exist_ok=True)
-
-            # 3. Зберігаємо згенерований код у тимчасовий скрипт
             script_path = tmp_path / "generated_script.py"
             script_path.write_text(code, encoding="utf-8")
+
+            # Preserve PATH for the interpreter's native dependencies, but avoid
+            # passing project-specific environment variables/secrets to LLM code.
+            execution_env = {
+                "PATH": os.environ.get("PATH", ""),
+                "PYTHONNOUSERSITE": "1",
+                "PYTHONUNBUFFERED": "1",
+            }
 
             try:
                 result = subprocess.run(
                     [sys.executable, str(script_path)],
-                    cwd=str(tmp_path),
+                    cwd=tmp_path,
                     capture_output=True,
                     text=True,
                     timeout=self.timeout_sec,
+                    env=execution_env,
                 )
                 stdout = result.stdout or ""
                 stderr = self._sanitize_stderr(result.stderr)
                 return_code = result.returncode
-                success = (return_code == 0)
+                success = return_code == 0
 
                 missing_files = []
-                if expected_output_files and success:
-                    for exp_file in expected_output_files:
-                        if not (tmp_path / exp_file).exists():
-                            missing_files.append(exp_file)
+                if success:
+                    for expected in expected_output_files or []:
+                        if not (tmp_path / expected).is_file():
+                            missing_files.append(expected)
                     if missing_files:
                         success = False
+                        missing_message = "Required output files missing: " + ", ".join(missing_files)
+                        stderr = f"{stderr}\n{missing_message}".strip()
 
+                artifact_files = self._persist_artifacts(out_dir, artifact_dir) if success else {}
                 error_info = None
                 if not success:
-                    error_info = stderr.strip().split("\n")[-1] if stderr else f"Exit code {return_code}"
+                    error_info = stderr.splitlines()[-1] if stderr else f"Exit code {return_code}"
 
                 return ExecutionResult(
                     success=success,
@@ -91,23 +133,25 @@ class PythonRunner:
                     stderr=stderr,
                     timed_out=False,
                     error_info=error_info,
+                    artifact_files=artifact_files,
                 )
-
             except subprocess.TimeoutExpired:
                 return ExecutionResult(
                     success=False,
                     return_code=None,
                     stdout="",
-                    stderr="Execution timed out.",
+                    stderr=f"Execution timed out after {self.timeout_sec} seconds.",
                     timed_out=True,
                     error_info=f"Process exceeded timeout of {self.timeout_sec} seconds.",
+                    artifact_files={},
                 )
-            except Exception as e:
+            except Exception as exc:
                 return ExecutionResult(
                     success=False,
                     return_code=None,
                     stdout="",
-                    stderr=str(e),
+                    stderr=str(exc),
                     timed_out=False,
-                    error_info=str(e),
+                    error_info=str(exc),
+                    artifact_files={},
                 )

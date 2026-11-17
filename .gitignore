@@ -1,7 +1,7 @@
-# Секрети та змінні середовища
+# Secrets and environment
 .env
 
-# Python / Кеш
+# Python / cache
 __pycache__/
 *.py[cod]
 *$py.class
@@ -10,20 +10,24 @@ __pycache__/
 env/
 venv/
 .venv/
+.pytest_cache/
 
-# IDE та редактори
+# IDEs and editors
 .idea/
 .vscode/
 *.swp
 *.swo
 
-# Дані та завантаження користувача
+# User data and generated artifacts
 backend/uploads/
 uploads/
+backend/artifacts/
+artifacts/
 *.csv
 *.parquet
 *.pkl
+*.joblib
 
-# ОС файли
+# OS files
 .DS_Store
 Thumbs.db

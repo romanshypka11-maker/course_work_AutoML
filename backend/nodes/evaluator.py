@@ -1,102 +1,58 @@
-import re
 from state import AutoMLState
 
-def parse_metrics_from_stdout(stdout: str) -> dict:
-    """
-    Витягує числові метрики із виводу stdout (з файлу metrics.txt).
-    """
-    metrics = {}
-    if not stdout:
-        return metrics
-    
-    for line in stdout.split("\n"):
-        match = re.search(r"['\"]?([a-zA-Z0-9_-]+)['\"]?\s*[:=]\s*([0-9]+\.[0-9]+|[0-9]+)", line)
-        if match:
-            key, val = match.groups()
-            try:
-                metrics[key] = float(val)
-            except ValueError:
-                pass
-    return metrics
+
+def _quality_is_acceptable(metrics: dict[str, float]) -> bool:
+    """Use conservative, explainable thresholds only when a comparable metric exists."""
+    for name in ("accuracy", "f1", "f1_macro", "roc_auc"):
+        if name in metrics:
+            return metrics[name] >= 0.50
+    if "r2" in metrics:
+        return metrics["r2"] >= 0.0
+    # A valid metric report is still a successful technical run. The UI lets the
+    # user assess task-specific metrics that do not have a universal threshold.
+    return bool(metrics)
+
 
 def evaluator_node(state: AutoMLState) -> dict:
-    """
-    Вузол Оцінювача (Evaluator / Critic).
-    Аналізує результати виконання та формує адресні підказки:
-    - Для Кодера (при технічних помилках)
-    - Для Стратега / Refiner (при аналізі причин поганих метрик)
-    """
-    print("--- [4] EVALUATOR / CRITIC: Аналіз результатів та діагностика ---")
-
-    last_success = state.get("last_success", False)
-    last_stderr = state.get("last_stderr", "")
-    last_stdout = state.get("last_stdout", "")
-    iteration_count = state.get("iteration_count", 1)
-
-    # ВИПАДОК 1: Технічна помилка виконання коду -> Підказка для КОДЕРА
-    if not last_success:
-        print(f"[-] Виявлено технічний збій у коді на ітерації {iteration_count}.")
-        code_error_feedback = f"""
-        ПОМИЛКА ВИКОНАННЯ КОДУ В ПІСОЧНИЦІ (stderr):
-        {last_stderr[-1500:]}
-        
-        ВКАЗІВКА ДЛЯ КОДЕРА:
-        Проаналізуй цей трейсбек. Виправ помилки у своєму скрипті (це можуть бути невірні імпорти, синтаксичні баги, помилки в назвах колонок DataFrame або проблеми з обробкою NaN). Надай повністю робочу виправлену версію коду.
-        """
+    print("--- [4/4] EVALUATOR: validating execution and metrics ---")
+    attempt = state.get("iteration_count", 0)
+    if not state.get("last_success", False):
+        stderr = (state.get("last_stderr") or "No error output was returned.")[-1800:]
+        feedback = (
+            f"Attempt {attempt} failed during execution. Fix the generated script using this traceback:\n{stderr}"
+        )
         return {
-            "feedback": code_error_feedback.strip(),
-            "last_metrics": {},
-            "status": "running"
+            "feedback": feedback,
+            "evaluation_report": "The generated script did not complete successfully.",
+            "status": "retrying" if state.get("error_type") != "fatal" else "failed",
         }
 
-    # ВИПАДОК 2: Код виконався успішно -> Аналізуємо якість метрик для СТРАТЕГА (Refiner)
-    print("[+] Код виконався успішно! Парсимо та аналізуємо метрики...")
-    metrics = parse_metrics_from_stdout(last_stdout)
-    
-    # Тут Критик оцінює якість і робить припущення "чому метрики можуть бути поганими"
-    metric_analysis_feedback = f"""
-    АНАЛІЗ ЯКОСТІ МОДЕЛІ (Ітерація {iteration_count}):
-    Отримані метрики: {metrics}
-    
-    ЕКСПЕРТНИЙ ВИСНОВОК КРИТИКА (Чому результати можуть бути субіддеальними та що змінити в плані):
-    - Якщо точність / ROC-AUC / R2 низькі, це може свідчити про недонавчання (underfitting), погане кодування категоріальних змінних, відсутність нормалізації чи дисбаланс класів.
-    - ВКАЗІВКА ДЛЯ СТРАТЕГА (REFINER): Будь ласка, скоригуй технічний план. Запропонуй інший алгоритм (наприклад, перейди від базового дерева до Gradient Boosting / LightGBM), додай крос-валідацію, покращ обробку викидів або застосуй балансування вибірки.
-    """
+    metrics = state.get("last_metrics") or {}
+    if not metrics:
+        return {
+            "feedback": (
+                "The script completed but out/metrics.json did not contain a JSON object with numeric metrics. "
+                "Write valid numeric metrics and print them."
+            ),
+            "error_type": "runtime_error",
+            "evaluation_report": "No usable numeric metrics were produced.",
+            "status": "retrying",
+        }
+
+    if _quality_is_acceptable(metrics):
+        return {
+            "feedback": None,
+            "error_type": None,
+            "evaluation_report": f"Pipeline completed successfully. Metrics: {metrics}",
+            "status": "success",
+        }
 
     return {
-        "feedback": metric_analysis_feedback.strip(),
-        "last_metrics": metrics,
-        "status": "running"
+        "feedback": (
+            f"Metrics from attempt {attempt} are below the baseline: {metrics}. "
+            "Revise preprocessing, validation, model choice or class balancing and generate another pipeline."
+        ),
+        "error_type": "fixable_metric",
+        "evaluation_report": f"Pipeline executed, but quality should be improved. Metrics: {metrics}",
+        "status": "bad_metrics",
     }
-
-
-def decide_next_step(state: AutoMLState) -> str:
-    """
-    Функція умовної маршрутизації (Conditional Edge) для LangGraph.
-    Визначає правильний потік залежно від природи проблеми:
-    - Якщо помилка коду -> назад до кодера ("to_coder")
-    - Якщо треба покращити якість/метрики -> назад до стратега ("to_refiner")
-    """
-    last_success = state.get("last_success", False)
-    iteration_count = state.get("iteration_count", 1)
-    max_iterations = state.get("max_iterations", 3)
-
-    # Якщо вичерпано ліміт спроб
-    if iteration_count >= max_iterations:
-        print("[ROUTE] Вичерпано максимальний ліміт ітерацій. Зупикаємо граф.")
-        return "limit_reached"
-
-    # 1. Якщо сталася технічна помилка в коді -> відправляємо КОДЕРУ для виправлення
-    if not last_success:
-        print("[ROUTE] Збій у виконанні коду -> Маршрутизація до CODER.")
-        return "to_coder"
-
-    # 2. Якщо код успішний, але якість метрик аналізується -> відправляємо СТРАТЕГУ (Refiner) для зміни плану
-    # (Можна обмежити кількість ітерацій оптимізації, наприклад, не більше 2 циклів планування)
-    if iteration_count < 2:
-        print("[ROUTE] Метрики потребують оптимізації -> Маршрутизація до PROMPT_REFINER (Стратега).")
-        return "to_refiner"
-
-    # 3. Якщо ітерацій достатньо і результати прийнятні -> успішне завершення
-    print("[ROUTE] Досягнуто цільових ітерацій та успішного результату -> Завершення.")
-    return "success"

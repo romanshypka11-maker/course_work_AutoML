@@ -1,74 +1,53 @@
-from tools.python_runner import PythonRunner
+"""Smoke tests for the generated-code runner.
 
-# Ініціалізуємо виконавець (для тесту таймауту поставимо короткий ліміт — 3 секунди)
-runner = PythonRunner(timeout_sec=3)
+Run from the repository root:
+    python test_sandbox.py
+"""
 
-print("=" * 60)
-print("ТЕСТ 1: Успішний код (вхідні дані + вихідний файл в out/)")
-print("=" * 60)
-
-# Симулюємо вхідний датасет
-input_data = {
-    "dataset.csv": "feature1,feature2,target\n1.5,2.0,0\n3.0,4.1,1\n5.2,6.3,0"
-}
-
-# Код, який зчитає датасет і збереже звіт у вихідну папку out/
-success_code = """
-import pandas as pd
+import sys
+import tempfile
 from pathlib import Path
 
-# Читаємо датасет із поточної ізольованої папки
-df = pd.read_csv('dataset.csv')
-print(f"Успішно завантажено датасет. Форма: {df.shape}")
-
-# Симулюємо збереження моделі або звіту у вихідну папку out/
-out_file = Path('out') / 'model_report.txt'
-out_file.write_text("Model accuracy: 95.5%", encoding="utf-8")
-print("Звіт успішно збережено у вихідну папку.")
-"""
-
-result_1 = runner.run_code(
-    code=success_code,
-    input_files=input_data,
-    expected_output_files=["out/model_report.txt"]
-)
-
-print(f"Статус успіху (Success): {result_1.success}")
-print(f"Код повернення (Return Code): {result_1.return_code}")
-print(f"Вивід (Stdout):\n{result_1.stdout.strip()}")
-print("\n" + "=" * 60)
+sys.path.insert(0, str(Path(__file__).parent / "backend"))
+from tools.python_runner import PythonRunner
 
 
-print("ТЕСТ 2: Код із помилкою (Runtime Error)")
-print("=" * 60)
+def main() -> None:
+    runner = PythonRunner(timeout_sec=2)
 
-error_code = """
+    with tempfile.TemporaryDirectory() as artifacts:
+        success_code = """
+import json
+from pathlib import Path
 import pandas as pd
-# Спроба прочитати файл, якого немає в пісочниці
-df = pd.read_csv('missing_file.csv')
+
+df = pd.read_csv('dataset.csv')
+Path('out/metrics.json').write_text(json.dumps({'accuracy': 0.95}))
+Path('out/model.joblib').write_bytes(b'demo-model')
+print('accuracy: 0.95')
 """
+        result = runner.run_code(
+            code=success_code,
+            input_files={"dataset.csv": "feature,target\n1,0\n2,1\n"},
+            expected_output_files=["out/metrics.json"],
+            artifact_dir=artifacts,
+        )
+        assert result.success, result.stderr
+        assert Path(result.artifact_files["metrics.json"]).is_file()
+        assert Path(result.artifact_files["model.joblib"]).is_file()
+        print("PASS: successful run persists metrics and model artifacts")
 
-result_2 = runner.run_code(code=error_code)
+    error_result = runner.run_code(
+        code="raise RuntimeError('intentional failure')",
+        expected_output_files=["out/metrics.json"],
+    )
+    assert not error_result.success and "intentional failure" in error_result.stderr
+    print("PASS: runtime error is captured")
 
-print(f"Статус успіху (Success): {result_2.success}")
-print(f"Інформація про помилку (Error Info): {result_2.error_info}")
-print(f"Очищений stderr:\n{result_2.stderr.strip()}")
-print("\n" + "=" * 60)
+    timeout_result = runner.run_code("while True: pass")
+    assert not timeout_result.success and timeout_result.timed_out
+    print("PASS: timeout is enforced")
 
 
-print("ТЕСТ 3: Захист від зависання (Timeout)")
-print("=" * 60)
-
-timeout_code = """
-import time
-print("Починаємо нескінченний цикл...")
-while True:
-    time.sleep(1)
-"""
-
-result_3 = runner.run_code(code=timeout_code)
-
-print(f"Статус успіху (Success): {result_3.success}")
-print(f"Чи спрацював таймаут (Timed Out): {result_3.timed_out}")
-print(f"Інформація про помилку: {result_3.error_info}")
-print("=" * 60)
+if __name__ == "__main__":
+    main()
