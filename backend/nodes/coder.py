@@ -8,7 +8,7 @@ class CoderAgent:
     """
     def __init__(self, model_name: str = os.environ.get("NAME_MODEL", "gemini-3.1-flash-lite")):
         self.client = OpenAI(
-            base_url=os.environ.get("BASE_URL", "[https://generativelanguage.googleapis.com/v1beta/openai/](https://generativelanguage.googleapis.com/v1beta/openai/)"),
+            base_url=os.environ.get("BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/"),
             api_key=os.environ.get("MODEL_API_KEY"),
         )
         self.model_name = model_name
